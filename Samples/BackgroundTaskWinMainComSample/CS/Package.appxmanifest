@@ -38,9 +38,7 @@
         Square44x44Logo="Assets\SmallTile-sdk.png">
 
         <uap:DefaultTile  ShortName="Sample WinMain Background Task App">
-
           <uap:ShowNameOnTiles>
-
             <uap:ShowOn Tile="square150x150Logo"/>
           </uap:ShowNameOnTiles>
         </uap:DefaultTile  >

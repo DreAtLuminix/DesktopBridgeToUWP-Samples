@@ -1,6 +1,11 @@
 using System;
 using Windows.ApplicationModel.Background;
 using System.Runtime.InteropServices;
+using Windows.ApplicationModel.AppService;
+using Windows.Foundation.Collections;
+using System.IO.Pipes;
+using System.Diagnostics;
+using System.Threading;
 
 namespace BackgroundTaskWinMainComSample_CS
 {
@@ -13,15 +18,21 @@ namespace BackgroundTaskWinMainComSample_CS
     public class TimeTriggeredTask : IBackgroundTask
     {
         // This is the flag the cancellation handler signals so the Run thread may exit.
-        private volatile int cleanupTask = 0;
+        private static volatile int cleanupTask = 0;
+
+        private static volatile int InFirstRunFlag = 1;
 
         // The largest number up to which this task will calculate primes.
         private const int maxPrimeNumber = 100000;
 
+        // the # of milliseconds to wait after calculating each prime number.
+        public const int ARTIFICIAL_DELAY_MS = 10;
+        public const int BACKGROUND_TASK_INTERVAL_MINUTES = 15;
+
         /// <summary>
         /// This method determines whether the specified number is a prime number.
         /// </summary>
-        private bool IsPrimeNumber(int dividend)
+        private static bool IsPrimeNumber(int dividend)
         {
             bool isPrime = true;
             for (int divisor = dividend - 1; divisor > 1; divisor -= 1)
@@ -39,7 +50,7 @@ namespace BackgroundTaskWinMainComSample_CS
         /// <summary>
         /// This method returns the next prime number given the last calculated number.
         /// </summary>
-        private int GetNextPrime(int previousNumber)
+        private static int GetNextPrime(int previousNumber)
         {
             int currentNumber = previousNumber + 1;
             while (!IsPrimeNumber(currentNumber))
@@ -73,21 +84,62 @@ namespace BackgroundTaskWinMainComSample_CS
         [MTAThread]
         public void Run(IBackgroundTaskInstance taskInstance)
         {
+            MainWindow.Log("TimeTriggeredTask.Run() entering!");
+            var deferral = taskInstance.GetDeferral();
+            taskInstance.Canceled += OnCanceled;
+            {
+                int original = Interlocked.Exchange(ref InFirstRunFlag, 0);
+                MainWindow.Log($"TimeTriggeredTask.Run(): Original Value: {original}, New Value: {InFirstRunFlag}");
+                CalculatePrimes();
+            };
+            deferral.Complete();
+        }
+
+
+        public static void CalculatePrimes()
+        {
             // Start with the first applicable number.
             int currentNumber = 1;
 
-            // Add the cancellation handler.
-            taskInstance.Canceled += OnCanceled;
-
             // Calculate primes until a cancellation has been requested or until the maximum
             // number is reached.
-            while ((cleanupTask == 0) && (currentNumber < maxPrimeNumber))
+            MainWindow.Log("TimeTriggeredTask: starting prime calculations");
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
+            int originallyFirstThread = InFirstRunFlag;
+            while (currentNumber < maxPrimeNumber)
             {
-                taskInstance.Progress = (uint)(currentNumber / maxPrimeNumber);
+                if (cleanupTask == 1)
+                {
+                    MainWindow.Log("TimeTriggeredTask: cleanupTask flag set... stopping calculation.");
+                    return;
+                }
+                if (sw.Elapsed.TotalMinutes > BACKGROUND_TASK_INTERVAL_MINUTES)
+                {
+                    MainWindow.Log($"TimeTriggeredTask: greater than 15 minutes... stopping calculation.");
+                    return;
+                }
+                // taskInstance.Progress = (uint)(currentNumber / maxPrimeNumber);
 
                 // Compute the next prime number and add it to our queue.
                 currentNumber = GetNextPrime(currentNumber);
+                SimplePOCSingleton.SendIt(currentNumber.ToString());
+                System.Threading.Thread.Sleep(ARTIFICIAL_DELAY_MS);
+
+                if (originallyFirstThread == 1)
+                {
+                    if (InFirstRunFlag == 0)
+                    {
+                        // automatic one took over, need to bail this thread
+                        string formTime = string.Format("{0:D2}:{1:D2}", sw.Elapsed.Minutes, sw.Elapsed.Seconds);
+                        MainWindow.Log($"TimeTriggeredTask: {formTime} elapsed, automatic one took over, need to bail this thread");
+                        return;
+                    }
+                }
             }
+            sw.Stop();
+            string formattedTime = string.Format("{0:D2}:{1:D2}", sw.Elapsed.Minutes, sw.Elapsed.Seconds);
+            MainWindow.Log($"TimeTriggeredTask: completed prime calculations in {formattedTime}");
         }
 
         /// <summary>
@@ -101,7 +153,6 @@ namespace BackgroundTaskWinMainComSample_CS
             // Set the flag to indicate to the main thread that it should stop performing
             // work and exit.
             cleanupTask = 1;
-
             return;
         }
     }

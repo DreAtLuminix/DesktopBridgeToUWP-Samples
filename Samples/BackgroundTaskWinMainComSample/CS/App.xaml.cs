@@ -33,6 +33,7 @@ namespace BackgroundTaskWinMainComSample_CS
         public App()
         {
             this.InitializeComponent();
+            MainWindow.Log("App startup");
         }
 
         /// <summary>

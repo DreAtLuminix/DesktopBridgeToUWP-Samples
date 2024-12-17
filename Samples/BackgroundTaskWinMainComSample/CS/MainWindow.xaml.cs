@@ -25,6 +25,7 @@ using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 using Windows.Foundation.Metadata;
+using System.Threading.Tasks;
 
 
 // To learn more about WinUI, the WinUI project structure,
@@ -37,6 +38,9 @@ namespace BackgroundTaskWinMainComSample_CS
     /// </summary>
     public sealed partial class MainWindow : Window
     {
+        public static void Log(string message) => 
+            System.Diagnostics.Debug.WriteLine($"@@@ [{System.Threading.Thread.CurrentThread.ManagedThreadId}] {message}");
+
         static private uint _RegistrationToken;
 
         /// <summary>
@@ -142,39 +146,69 @@ namespace BackgroundTaskWinMainComSample_CS
         /// </summary>
         static void RegisterProcessForBackgroundTask<TaskType, TaskInterface>() where TaskType : TaskInterface, new()
         {
-            // If the application is compiled with the full .NET frameworks, the
+            // supposedly, if the application is compiled with the full .NET frameworks, the
             // built-in RegistrationServices class may be used to use COM server
             // registration APIs.
-
-/*
-            RegistrationServices registrationServices = new RegistrationServices();
-            registrationServices.RegisterTypeForComClients(typeof(TaskType),
-                                                           RegistrationClassContext.LocalServer,
-                                                           RegistrationConnectionType.MultipleUse);
-*/
+            //RegistrationServices registrationServices = new RegistrationServices();
+            //registrationServices.RegisterTypeForComClients(typeof(TaskType),
+            //                                               RegistrationClassContext.LocalServer,
+            //                                               RegistrationConnectionType.MultipleUse);
+            /*
+            */
 
             // This app is currently using the .NET Core framework. Use the
             // manual C++ imported implementation of the CoRegisterClassObject
             // API.
 
             Guid taskGuid = typeof(TaskType).GUID;
-            CppComApi.CoRegisterClassObject(ref taskGuid,
+            int rtn = CppComApi.CoRegisterClassObject(ref taskGuid,
                                             new CppComApi.BackgroundTaskFactory<TaskType, TaskInterface>(),
                                             CppComApi.CLSCTX_LOCAL_SERVER,
                                             CppComApi.REGCLS_MULTIPLEUSE,
                                             out _RegistrationToken);
+            Log($"RegisterProcessForBackgroundTask: rtn={rtn}, _RegistrationToken={_RegistrationToken}");
+            Task.Run(() => {
+                Log($"RegisterProcessForBackgroundTask: forcing first run");
+                TimeTriggeredTask.CalculatePrimes();
+                Log($"RegisterProcessForBackgroundTask: first run stopped. real background task takes over from here");
+            });
         }
 
         public MainWindow()
         {
             InitializeComponent();
 
-            RegisterBackgroundTaskWithSystem(new TimeTrigger(15, false), typeof(TimeTriggeredTask).GUID, typeof(TimeTriggeredTask).Name);
+            RegisterBackgroundTaskWithSystem(
+                new TimeTrigger(TimeTriggeredTask.BACKGROUND_TASK_INTERVAL_MINUTES, false), 
+                typeof(TimeTriggeredTask).GUID, 
+                typeof(TimeTriggeredTask).Name
+            );
             RegisterProcessForBackgroundTask<TimeTriggeredTask, IBackgroundTask>();
+
+            dispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            SimplePOCSingleton.PrimeNumberReceived += SimplePOCSingleton_PrimeNumberReceived;
+        }
+
+        Microsoft.UI.Dispatching.DispatcherQueue dispatcherQueue;
+
+        private void SimplePOCSingleton_PrimeNumberReceived(object sender, string e)
+        {
+            // Log($"SimplePOCSingleton_PrimeNumberReceived: {e}");
+            bool enqueued = dispatcherQueue.TryEnqueue(() =>
+            {
+                // UI updates here
+                myButton.Content = e;
+            });
+
+            if (!enqueued)
+            {
+                Log("Failed to enqueue the task.");
+            }
         }
 
         private void myButton_Click(object sender, RoutedEventArgs e)
         {
+            Log("myButton_Click");
             myButton.Content = "Clicked";
         }
     }
